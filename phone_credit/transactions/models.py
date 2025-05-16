@@ -29,3 +29,7 @@ class TransactionLog(models.Model):
 
     class Meta:
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['seller', 'created_at']),
+            models.Index(fields=['type', 'status']),
+        ]
