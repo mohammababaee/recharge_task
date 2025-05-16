@@ -1,19 +1,17 @@
-from multiprocessing import Process
 from django.test import TestCase
 from django.contrib.auth import get_user_model
 from django.db import transaction
-from django.core.exceptions import ValidationError
-from .models import PhoneNumber, Recharge
-from .repositories import RechargeProcessRepository
-from credits.models import SellerCredit
-from transactions.models import TransactionLog
-from django.db import connections
+from credits.models import SellerCredit, CreditRequest
+from credits.services import CreditService
+import multiprocessing
+from concurrent.futures import ProcessPoolExecutor
+import random
 
 User = get_user_model()
 
-class RechargeModelTests(TestCase):
+class RechargeTest(TestCase):
     def setUp(self):
-        # Create test users
+        # Create two sellers as required
         self.seller1 = User.objects.create_user(
             username='seller1',
             password='testpass123',
@@ -25,186 +23,113 @@ class RechargeModelTests(TestCase):
             is_seller=True
         )
         
-        # Create seller credits
-        self.seller1_credit = SellerCredit.objects.create(
-            seller=self.seller1,
-            credit=1000000  # 1,000,000 Toman
-        )
-        self.seller2_credit = SellerCredit.objects.create(
-            seller=self.seller2,
-            credit=1000000  # 1,000,000 Toman
-        )
-        
-        # Create test phone numbers
-        self.phone1 = PhoneNumber.objects.create(
-            number='+989123456789',
-            credit=0
-        )
-        self.phone2 = PhoneNumber.objects.create(
-            number='+989987654321',
-            credit=0
-        )
+        # Initialize seller credits
+        self.seller1_credit = SellerCredit.objects.create(seller=self.seller1, credit=0)
+        self.seller2_credit = SellerCredit.objects.create(seller=self.seller2, credit=0)
 
-    def test_recharge_creation(self):
-        """Test basic recharge creation"""
-        recharge = Recharge.objects.create(
-            seller=self.seller1,
-            phone_number=self.phone1,
-            amount=50000
-        )
-        self.assertEqual(recharge.amount, 50000)
-        self.assertEqual(recharge.seller, self.seller1)
-        self.assertEqual(recharge.phone_number, self.phone1)
-
-    def test_recharge_process(self):
-        """Test complete recharge process"""
-        initial_seller_credit = self.seller1_credit.credit
-        initial_phone_credit = self.phone1.credit
-        recharge_amount = 50000
-
-        # Process recharge
-        RechargeProcessRepository.selling_charge_to_phone_number(
-            user=self.seller1,
-            amount=recharge_amount,
-            phone_number=self.phone1.number
-        )
-
-        # Verify seller credit decrease
-        self.seller1_credit.refresh_from_db()
-        self.assertEqual(
-            self.seller1_credit.credit,
-            initial_seller_credit - recharge_amount
-        )
-
-        # Verify phone credit increase
-        self.phone1.refresh_from_db()
-        self.assertEqual(
-            self.phone1.credit,
-            initial_phone_credit + recharge_amount
-        )
-
-    def test_insufficient_credit_recharge(self):
-        """Test recharge with insufficient credit"""
-        with self.assertRaises(ValueError):
-            RechargeProcessRepository.selling_charge_to_phone_number(
-                user=self.seller1,
-                amount=2000000,  # More than available credit
-                phone_number=self.phone1.number
+    def test_credit_increases_and_recharges(self):
+        """Test 10 credit increases and 1000 recharges as specified"""
+        # Step 1: Create and approve 10 credit increases for seller1
+        total_credit_increased = 0
+        for i in range(10):
+            amount = random.randint(100000, 1000000)  # Random amount between 100k and 1M
+            request = CreditRequest.objects.create(
+                seller=self.seller1,
+                amount=amount,
+                status=CreditRequest.PENDING
             )
+            
+            # Approve the request
+            CreditService.approve_request(request.id)
+            total_credit_increased += amount
+            
+            # Verify the credit was increased
+            self.seller1_credit.refresh_from_db()
+            self.assertEqual(self.seller1_credit.credit, total_credit_increased)
 
-    def test_concurrent_recharges(self):
-        """Test concurrent recharge operations"""
+        # Step 2: Perform 1000 recharge transactions
+        recharge_amount = 5000
+        phone_numbers = [f"0912345{i:04d}" for i in range(1000)]
+        
+        # Use multiprocessing for parallel execution
+        num_processes = multiprocessing.cpu_count()
+        iterations_per_process = 1000 // num_processes
+        
+        def recharge_worker(seller_id, phone_numbers, amount, start_idx, count):
+            from django.db import connection
+            connection.close()  # Close connection before forking
+            
+            seller = User.objects.get(id=seller_id)
+            for i in range(count):
+                phone_number = phone_numbers[start_idx + i]
+                try:
+                    with transaction.atomic():
+                        CreditService.recharge_phone(
+                            seller=seller,
+                            phone_number=phone_number,
+                            amount=amount
+                        )
+                except Exception as e:
+                    print(f"Error in worker: {str(e)}")
 
-        def recharge_operation():
-            # You need to re-fetch seller and phone from DB in each process
-            seller = User.objects.get(pk=self.seller1.pk)
-            phone = PhoneNumber.objects.get(pk=self.phone1.pk)
-            with transaction.atomic():
-                RechargeProcessRepository.selling_charge_to_phone_number(
-                    user=seller,
-                    amount=10000,
-                    phone_number=phone.number
+        # Run parallel recharge operations
+        with ProcessPoolExecutor(max_workers=num_processes) as executor:
+            futures = []
+            for i in range(num_processes):
+                start_idx = i * iterations_per_process
+                futures.append(
+                    executor.submit(
+                        recharge_worker,
+                        self.seller1.id,
+                        phone_numbers,
+                        recharge_amount,
+                        start_idx,
+                        iterations_per_process
+                    )
                 )
+            
+            # Wait for all processes to complete
+            for future in futures:
+                future.result()
 
-        # Simulate concurrent recharges using multiprocessing
-        processes = []
-        for _ in range(10):
-            p = Process(target=recharge_operation)
-            processes.append(p)
-            p.start()
-
-        for p in processes:
-            p.join()
-
+        # Step 3: Validate final balances
         self.seller1_credit.refresh_from_db()
-        self.phone1.refresh_from_db()
+        expected_credit = total_credit_increased - (1000 * recharge_amount)
+        self.assertEqual(self.seller1_credit.credit, expected_credit)
+        
+        # Verify transaction records
+        from transactions.models import TransactionLog
+        recharge_count = TransactionLog.objects.filter(
+            seller=self.seller1,
+            transaction_type='recharge'
+        ).count()
+        self.assertEqual(recharge_count, 1000)
+        
+        credit_increase_count = TransactionLog.objects.filter(
+            seller=self.seller1,
+            transaction_type='credit_increase'
+        ).count()
+        self.assertEqual(credit_increase_count, 10)
 
-        self.assertEqual(
-            self.seller1_credit.credit,
-            900000  # 1,000,000 - (10 * 10,000)
-        )
-        self.assertEqual(
-            self.phone1.credit,
-            100000  # 0 + (10 * 10,000)
-        )
-        connections.close_all()
-
-    def test_multiple_sellers_recharge(self):
-        """Test recharges from multiple sellers"""
-        # First seller recharges
-        RechargeProcessRepository.selling_charge_to_phone_number(
-            user=self.seller1,
-            amount=50000,
-            phone_number=self.phone1.number
-        )
-
-        # Second seller recharges
-        RechargeProcessRepository.selling_charge_to_phone_number(
-            user=self.seller2,
-            amount=75000,
-            phone_number=self.phone1.number
-        )
-
-        # Verify final balances
+    def test_negative_credit_prevention(self):
+        """Test that credit cannot go negative during recharge"""
+        # Set initial credit
+        initial_credit = 1000
+        self.seller1_credit.credit = initial_credit
+        self.seller1_credit.save()
+        
+        # Try to recharge more than available credit
+        recharge_amount = 2000
+        phone_number = "09123456789"
+        
+        with self.assertRaises(Exception):
+            with transaction.atomic():
+                CreditService.recharge_phone(
+                    seller=self.seller1,
+                    phone_number=phone_number,
+                    amount=recharge_amount
+                )
+        
+        # Verify credit remains unchanged
         self.seller1_credit.refresh_from_db()
-        self.seller2_credit.refresh_from_db()
-        self.phone1.refresh_from_db()
-
-        self.assertEqual(self.seller1_credit.credit, 950000)  # 1,000,000 - 50,000
-        self.assertEqual(self.seller2_credit.credit, 925000)  # 1,000,000 - 75,000
-        self.assertEqual(self.phone1.credit, 125000)  # 50,000 + 75,000
-
-    def test_transaction_logging(self):
-        """Test transaction logging for recharges"""
-        recharge_amount = 50000
-        
-        # Process recharge
-        RechargeProcessRepository.selling_charge_to_phone_number(
-            user=self.seller1,
-            amount=recharge_amount,
-            phone_number=self.phone1.number
-        )
-
-        # Verify transaction logs
-        credit_transaction = TransactionLog.objects.filter(
-            seller=self.seller1,
-            type=TransactionLog.CREDIT,
-            action_type=TransactionLog.DECREASE
-        ).first()
-        
-        recharge_transaction = TransactionLog.objects.filter(
-            seller=self.seller1,
-            type=TransactionLog.RECHARGE,
-            action_type=TransactionLog.INCREASE
-        ).first()
-
-        self.assertIsNotNone(credit_transaction)
-        self.assertIsNotNone(recharge_transaction)
-        self.assertEqual(credit_transaction.amount, recharge_amount)
-        self.assertEqual(recharge_transaction.amount, recharge_amount)
-
-    def test_invalid_phone_number(self):
-        """Test recharge with invalid phone number"""
-        with self.assertRaises(ValueError):
-            RechargeProcessRepository.selling_charge_to_phone_number(
-                user=self.seller1,
-                amount=50000,
-                phone_number='invalid_number'
-            )
-
-    def test_recharge_validation(self):
-        # Negative amount
-        with self.assertRaises(ValidationError):
-            RechargeProcessRepository.selling_charge_to_phone_number(
-                user=self.seller1,
-                amount=-50000,
-                phone_number=self.phone1.number
-            )
-
-        # Zero amount
-        with self.assertRaises(ValidationError):
-            RechargeProcessRepository.selling_charge_to_phone_number(
-                user=self.seller1,
-                amount=0,
-                phone_number=self.phone1.number
-            )
+        self.assertEqual(self.seller1_credit.credit, initial_credit) 
