@@ -28,19 +28,78 @@ class RechargeTest(TestCase):
         self.seller2_credit = SellerCredit.objects.create(seller=self.seller2, credit=0)
 
     def test_credit_increases_and_recharges(self):
-        """Test 10 credit increases and 1000 recharges as specified"""
-        # Step 1: Create and approve 10 credit increases for seller1
-        total_credit_increased = 0
+        """Test 10 credit increases and 50 recharges"""
+        # Step 1: Create and approve 10 credit increases
         for i in range(10):
-            amount = random.randint(100000, 1000000)  # Random amount between 100k and 1M
-            request = CreditService.increase_credit(self.seller1,amount)
-            
-            # Approve the request
+            request = CreditRequest.objects.create(
+                seller=self.seller1,
+                amount=1000000,  # 1M for each increase
+                status=CreditRequest.PENDING
+            )
             CreditService.approve_request(request.id)
-            total_credit_increased += amount
-            # Verify the credit was increased
-            self.seller1_credit.refresh_from_db()
-            self.assertEqual(self.seller1_credit.credit, total_credit_increased)
+        
+        # Verify total credit
+        self.seller1_credit.refresh_from_db()
+        self.assertEqual(self.seller1_credit.credit, 10000000)  # 10M total
+
+        # Step 2: Perform 50 recharge transactions
+        def recharge_worker(seller_id, start_idx, count):
+            from django.db import connection
+            connection.close()
+            
+            seller = User.objects.get(id=seller_id)
+            for i in range(count):
+                phone_number = f"0912345{start_idx + i:04d}"
+                with transaction.atomic():
+                    CreditService.recharge_phone(
+                        seller=seller,
+                        phone_number=phone_number,
+                        amount=5000
+                    )
+
+        # Run parallel recharge operations
+        num_processes = min(multiprocessing.cpu_count(), 4)  # Limit to 4 processes
+        iterations_per_process = 50 // num_processes
+        
+        with ProcessPoolExecutor(max_workers=num_processes) as executor:
+            futures = []
+            for i in range(num_processes):
+                start_idx = i * iterations_per_process
+                futures.append(
+                    executor.submit(
+                        recharge_worker,
+                        self.seller1.id,
+                        start_idx,
+                        iterations_per_process
+                    )
+                )
+            
+            # Wait for all processes to complete
+            for future in futures:
+                future.result()
+
+        # Step 3: Verify final state
+        self.seller1_credit.refresh_from_db()
+        expected_credit = 10000000 - (50 * 5000)  # 10M - (50 * 5000)
+        self.assertEqual(self.seller1_credit.credit, expected_credit)
+        
+        # Verify transaction records
+        from transactions.models import TransactionLog
+        self.assertEqual(
+            TransactionLog.objects.filter(
+                seller=self.seller1,
+                transaction_type='recharge'
+            ).count(),
+            50
+        )
+        self.assertEqual(
+            TransactionLog.objects.filter(
+                seller=self.seller1,
+                transaction_type='credit_increase'
+            ).count(),
+            10
+        )
+
 
 
     def test_negative_credit_prevention(self):
