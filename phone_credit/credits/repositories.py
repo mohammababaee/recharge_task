@@ -1,5 +1,7 @@
 from django.db import transaction
 from django.db.models import F
+from django.core.exceptions import ObjectDoesNotExist
+from django.forms import ValidationError
 
 from .models import CreditRequest
 from credits.models import SellerCredit
@@ -10,12 +12,38 @@ class CreditRepository:
 
     @staticmethod
     @transaction.atomic
+    def decrease_credit(user, amount):
+
+        seller_credit = (
+            SellerCredit.objects.select_for_update()
+            .get(seller=user)
+        )
+
+        seller_credit.refresh_from_db()
+
+        if seller_credit.credit < amount:
+            raise ValidationError("Insufficient credit.")
+
+        seller_credit.credit = F('credit') - amount
+        seller_credit.save()
+
+        return True
+    
+    @staticmethod
+    @transaction.atomic
     def increase_credit(user, amount, return_updated=False):
         credit = CreditRequest.objects.create(seller=user, amount=amount)
 
-        SellerCredit.objects.get_or_create(seller=user)
+        try:
+            seller_credit = (
+                SellerCredit.objects.select_for_update()
+                .get(seller=user)
+            )
+        except ObjectDoesNotExist:
+            seller_credit = SellerCredit.objects.create(seller=user)
 
-        SellerCredit.objects.filter(seller=user).update(freezed_credit=F('freezed_credit') + amount)
+        seller_credit.freezed_credit = F('freezed_credit') + amount
+        seller_credit.save()
 
         if return_updated:
             return credit
@@ -23,7 +51,7 @@ class CreditRepository:
         return True
     
     @staticmethod
-    def approve(request_id):
+    def approve_credit_request(request_id):
         
         with transaction.atomic():
             try:
