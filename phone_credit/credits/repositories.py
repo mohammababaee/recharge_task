@@ -18,7 +18,7 @@ class CreditRepository:
             SellerCredit.objects.select_for_update()
             .get(seller=user)
         )
-
+        
         seller_credit.refresh_from_db()
 
         if seller_credit.credit < amount:

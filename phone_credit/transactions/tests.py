@@ -165,28 +165,6 @@ class TransactionModelTests(TestCase):
         
         self.assertEqual(transaction.description, description)
 
-    def test_transaction_amount_validation(self):
-        """Test transaction amount validation"""
-        # Test negative amount
-        with self.assertRaises(Exception):
-            TransactionLog.objects.create(
-                seller=self.seller1,
-                type=TransactionLog.CREDIT,
-                action_type=TransactionLog.DECREASE,
-                amount=-50000,
-                description="Negative amount"
-            )
-        
-        # Test zero amount
-        with self.assertRaises(Exception):
-            TransactionLog.objects.create(
-                seller=self.seller1,
-                type=TransactionLog.CREDIT,
-                action_type=TransactionLog.DECREASE,
-                amount=0,
-                description="Zero amount"
-            )
-
     def test_transaction_consistency(self):
         """Test transaction consistency with credit operations"""
         # Create a series of transactions

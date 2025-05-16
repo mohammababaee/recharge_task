@@ -1,3 +1,4 @@
+from multiprocessing import Process
 from django.test import TestCase
 from django.contrib.auth import get_user_model
 from django.db import transaction
@@ -6,6 +7,7 @@ from .models import PhoneNumber, Recharge
 from .repositories import RechargeProcessRepository
 from credits.models import SellerCredit
 from transactions.models import TransactionLog
+from django.db import connections
 
 User = get_user_model()
 
@@ -92,29 +94,31 @@ class RechargeModelTests(TestCase):
 
     def test_concurrent_recharges(self):
         """Test concurrent recharge operations"""
+
         def recharge_operation():
+            # You need to re-fetch seller and phone from DB in each process
+            seller = User.objects.get(pk=self.seller1.pk)
+            phone = PhoneNumber.objects.get(pk=self.phone1.pk)
             with transaction.atomic():
                 RechargeProcessRepository.selling_charge_to_phone_number(
-                    user=self.seller1,
+                    user=seller,
                     amount=10000,
-                    phone_number=self.phone1.number
+                    phone_number=phone.number
                 )
 
-        # Simulate concurrent recharges
-        import threading
-        threads = []
+        # Simulate concurrent recharges using multiprocessing
+        processes = []
         for _ in range(10):
-            thread = threading.Thread(target=recharge_operation)
-            threads.append(thread)
-            thread.start()
+            p = Process(target=recharge_operation)
+            processes.append(p)
+            p.start()
 
-        for thread in threads:
-            thread.join()
+        for p in processes:
+            p.join()
 
-        # Verify final balances
         self.seller1_credit.refresh_from_db()
         self.phone1.refresh_from_db()
-        
+
         self.assertEqual(
             self.seller1_credit.credit,
             900000  # 1,000,000 - (10 * 10,000)
@@ -123,6 +127,7 @@ class RechargeModelTests(TestCase):
             self.phone1.credit,
             100000  # 0 + (10 * 10,000)
         )
+        connections.close_all()
 
     def test_multiple_sellers_recharge(self):
         """Test recharges from multiple sellers"""
@@ -188,8 +193,7 @@ class RechargeModelTests(TestCase):
             )
 
     def test_recharge_validation(self):
-        """Test recharge amount validation"""
-        # Test negative amount
+        # Negative amount
         with self.assertRaises(ValidationError):
             RechargeProcessRepository.selling_charge_to_phone_number(
                 user=self.seller1,
@@ -197,7 +201,7 @@ class RechargeModelTests(TestCase):
                 phone_number=self.phone1.number
             )
 
-        # Test zero amount
+        # Zero amount
         with self.assertRaises(ValidationError):
             RechargeProcessRepository.selling_charge_to_phone_number(
                 user=self.seller1,
