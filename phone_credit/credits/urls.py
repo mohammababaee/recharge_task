@@ -1,9 +1,10 @@
 # recharge/urls.py
 
 from django.urls import path
-from .views import CreditRequestView
+from .views import ApproveCreditView, CreditRequestView
 
 
 urlpatterns = [
-    path("request/", CreditRequestView.as_view(), name="credit-request"),
+    path("increase-request/", CreditRequestView.as_view(), name="credit-request"),
+    path("approve-request/", ApproveCreditView.as_view(), name="credit-request"),
 ]
