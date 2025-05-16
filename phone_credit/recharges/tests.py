@@ -7,6 +7,8 @@ import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
 import random
 
+from recharges.models import PhoneNumber
+
 User = get_user_model()
 
 class RechargeTest(TestCase):
@@ -31,11 +33,7 @@ class RechargeTest(TestCase):
         """Test 10 credit increases and 50 recharges"""
         # Step 1: Create and approve 10 credit increases
         for i in range(10):
-            request = CreditRequest.objects.create(
-                seller=self.seller1,
-                amount=1000000,  # 1M for each increase
-                status=CreditRequest.PENDING
-            )
+            request = CreditService.increase_credit(self.seller1,1000000)
             CreditService.approve_request(request.id)
         
         # Verify total credit
@@ -49,7 +47,9 @@ class RechargeTest(TestCase):
             
             seller = User.objects.get(id=seller_id)
             for i in range(count):
+                print("1243")
                 phone_number = f"0912345{start_idx + i:04d}"
+                PhoneNumber.objects.create(phone_number=phone_number)
                 with transaction.atomic():
                     CreditService.recharge_phone(
                         seller=seller,
@@ -57,8 +57,7 @@ class RechargeTest(TestCase):
                         amount=5000
                     )
 
-        # Run parallel recharge operations
-        num_processes = min(multiprocessing.cpu_count(), 4)  # Limit to 4 processes
+        num_processes = min(multiprocessing.cpu_count(), 4)
         iterations_per_process = 50 // num_processes
         
         with ProcessPoolExecutor(max_workers=num_processes) as executor:
@@ -74,16 +73,14 @@ class RechargeTest(TestCase):
                     )
                 )
             
-            # Wait for all processes to complete
             for future in futures:
                 future.result()
 
-        # Step 3: Verify final state
+        
         self.seller1_credit.refresh_from_db()
         expected_credit = 10000000 - (50 * 5000)  # 10M - (50 * 5000)
         self.assertEqual(self.seller1_credit.credit, expected_credit)
         
-        # Verify transaction records
         from transactions.models import TransactionLog
         self.assertEqual(
             TransactionLog.objects.filter(
