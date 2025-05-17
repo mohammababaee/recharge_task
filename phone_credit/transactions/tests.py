@@ -10,7 +10,6 @@ User = get_user_model()
 
 class TransactionModelTests(TestCase):
     def setUp(self):
-        # Create test users
         self.seller1 = User.objects.create_user(
             username='seller1',
             password='testpass123',
@@ -22,7 +21,6 @@ class TransactionModelTests(TestCase):
             is_seller=True
         )
         
-        # Create seller credits
         self.seller1_credit = SellerCredit.objects.create(
             seller=self.seller1,
             credit=1000000  # 1,000,000 Toman
@@ -32,7 +30,6 @@ class TransactionModelTests(TestCase):
             credit=1000000  # 1,000,000 Toman
         )
         
-        # Create test phone number
         self.phone = PhoneNumber.objects.create(
             number='+989123456789',
             credit=0
@@ -55,7 +52,6 @@ class TransactionModelTests(TestCase):
 
     def test_transaction_ordering(self):
         """Test transaction ordering by creation date"""
-        # Create transactions in reverse order
         transaction2 = TransactionLog.objects.create(
             seller=self.seller1,
             type=TransactionLog.CREDIT,
@@ -72,14 +68,12 @@ class TransactionModelTests(TestCase):
             description="First transaction"
         )
         
-        # Verify ordering
         transactions = TransactionLog.objects.all()
         self.assertEqual(transactions[0], transaction1)
         self.assertEqual(transactions[1], transaction2)
 
     def test_transaction_types(self):
         """Test different transaction types"""
-        # Credit transaction
         credit_transaction = TransactionLog.objects.create(
             seller=self.seller1,
             type=TransactionLog.CREDIT,
@@ -88,7 +82,6 @@ class TransactionModelTests(TestCase):
             description="Credit decrease"
         )
         
-        # Recharge transaction
         recharge_transaction = TransactionLog.objects.create(
             seller=self.seller1,
             type=TransactionLog.RECHARGE,
@@ -102,7 +95,6 @@ class TransactionModelTests(TestCase):
 
     def test_transaction_action_types(self):
         """Test different transaction action types"""
-        # Increase transaction
         increase_transaction = TransactionLog.objects.create(
             seller=self.seller1,
             type=TransactionLog.CREDIT,
@@ -111,7 +103,6 @@ class TransactionModelTests(TestCase):
             description="Credit increase"
         )
         
-        # Decrease transaction
         decrease_transaction = TransactionLog.objects.create(
             seller=self.seller1,
             type=TransactionLog.CREDIT,
@@ -125,7 +116,6 @@ class TransactionModelTests(TestCase):
 
     def test_multiple_seller_transactions(self):
         """Test transactions from multiple sellers"""
-        # First seller transactions
         TransactionLog.objects.create(
             seller=self.seller1,
             type=TransactionLog.CREDIT,
@@ -134,7 +124,6 @@ class TransactionModelTests(TestCase):
             description="Seller 1 transaction"
         )
         
-        # Second seller transactions
         TransactionLog.objects.create(
             seller=self.seller2,
             type=TransactionLog.CREDIT,
@@ -143,7 +132,6 @@ class TransactionModelTests(TestCase):
             description="Seller 2 transaction"
         )
         
-        # Verify transactions
         seller1_transactions = TransactionLog.objects.filter(seller=self.seller1)
         seller2_transactions = TransactionLog.objects.filter(seller=self.seller2)
         
@@ -167,7 +155,6 @@ class TransactionModelTests(TestCase):
 
     def test_transaction_consistency(self):
         """Test transaction consistency with credit operations"""
-        # Create a series of transactions
         transactions = [
             (TransactionLog.CREDIT, TransactionLog.INCREASE, 100000),
             (TransactionLog.CREDIT, TransactionLog.DECREASE, 50000),
@@ -184,10 +171,8 @@ class TransactionModelTests(TestCase):
                 description=f"{type_} {action_type} for {amount}"
             )
         
-        # Verify transaction count
         self.assertEqual(TransactionLog.objects.count(), len(transactions))
         
-        # Verify transaction amounts
         total_amount = sum(amount for _, _, amount in transactions)
         self.assertEqual(
             TransactionLog.objects.aggregate(total=models.Sum('amount'))['total'],

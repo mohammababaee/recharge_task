@@ -27,7 +27,6 @@ class RechargeTest(TransactionTestCase):
         self.seller2_credit = SellerCredit.objects.create(seller=self.seller2, credit=0)
 
     def test_concurrent_recharges(self):
-        # Approve 10 credit increases of 500,000 for a total of 5,000,000
         for _ in range(10):
             req = CreditService.increase_credit(self.seller1,amount=500000)
             CreditService.approve_request(request_id=req.id)
@@ -58,7 +57,7 @@ class RechargeTest(TransactionTestCase):
             for f in futures:
                 f.result()
 
-        # Assertions
+
         self.seller1_credit.refresh_from_db()
         self.assertEqual(self.seller1_credit.credit, 5_000_000 - 1000 * 5000)
 
@@ -83,6 +82,5 @@ class RechargeTest(TransactionTestCase):
                 amount=recharge_amount
             )
 
-        # Verify credit remains unchanged
         self.seller1_credit.refresh_from_db()
         self.assertEqual(self.seller1_credit.credit, initial_credit)
