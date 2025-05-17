@@ -29,19 +29,19 @@ class RechargeTest(TransactionTestCase):
     def test_concurrent_recharges(self):
         # Approve 10 credit increases of 500,000 for a total of 5,000,000
         for _ in range(10):
-            req = CreditService.increase_credit(self.seller1,amount=5000000)
+            req = CreditService.increase_credit(self.seller1,amount=500000)
             CreditService.approve_request(request_id=req.id)
         # print(User.objects.all())
         def recharge_worker(seller_id, start_idx, count):
             print(User.objects.all())
-            print(User.objects.all())
+            print(SellerCredit.objects.all())
             seller = User.objects.get(id=seller_id)
             credit = SellerCredit.objects.get(seller=seller)
             for i in range(count):
                 print(SellerCredit.objects.all())
                 phone_number = f"0912345{start_idx + i:04d}"
                 PhoneNumber.objects.create(number=phone_number,credit=0)
-                RechargePhoneNumberService.charge_phone_number(seller, phone_number, 5000)
+                RechargePhoneNumberService.charge_phone_number(seller, 5000, phone_number)
 
         # Simulate 1000 recharges using 10 threads
         num_threads = 10
@@ -63,7 +63,7 @@ class RechargeTest(TransactionTestCase):
         self.assertEqual(self.seller1_credit.credit, 5_000_000 - 1000 * 5000)
 
         self.assertEqual(
-            TransactionLog.objects.filter(seller=self.seller1, transaction_type='recharge').count(),
+            TransactionLog.objects.filter(seller=self.seller1, type=TransactionLog.RECHARGE).count(),
             1000
         )
 

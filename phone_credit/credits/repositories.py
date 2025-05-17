@@ -20,6 +20,8 @@ class CreditRepository:
         seller_credit.refresh_from_db()
 
         if seller_credit.credit < int(amount):
+            print(seller_credit.credit)
+            print(amount)
             raise ValidationError("Insufficient credit.")
 
         seller_credit.credit = F('credit') - int(amount)
