@@ -13,5 +13,5 @@ class TransactionRepository:
             seller=seller,
             description=description,
             action_type=action_type,
-            created_at=now()  # optional, see note below
+            created_at=now()  
         )

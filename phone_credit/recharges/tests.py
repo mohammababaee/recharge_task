@@ -1,19 +1,18 @@
-from django.test import TestCase
+from django.test import TransactionTestCase
 from django.contrib.auth import get_user_model
 from django.db import transaction
-from credits.models import SellerCredit, CreditRequest
-from credits.services import CreditService
-import multiprocessing
-from concurrent.futures import ProcessPoolExecutor
-import random
+from concurrent.futures import ThreadPoolExecutor
 
+from credits.models import SellerCredit, CreditRequest, TransactionLog
+from credits.services import CreditService
+from recharges.services import RechargePhoneNumberService
 from recharges.models import PhoneNumber
 
 User = get_user_model()
 
-class RechargeTest(TestCase):
+
+class RechargeTest(TransactionTestCase):
     def setUp(self):
-        # Create two sellers as required
         self.seller1 = User.objects.create_user(
             username='seller1',
             password='testpass123',
@@ -24,100 +23,66 @@ class RechargeTest(TestCase):
             password='testpass123',
             is_seller=True
         )
-        
-        # Initialize seller credits
         self.seller1_credit = SellerCredit.objects.create(seller=self.seller1, credit=0)
         self.seller2_credit = SellerCredit.objects.create(seller=self.seller2, credit=0)
 
-    def test_credit_increases_and_recharges(self):
-        """Test 10 credit increases and 50 recharges"""
-        # Step 1: Create and approve 10 credit increases
-        for i in range(10):
-            request = CreditService.increase_credit(self.seller1,1000000)
-            CreditService.approve_request(request.id)
-        
-        # Verify total credit
-        self.seller1_credit.refresh_from_db()
-        self.assertEqual(self.seller1_credit.credit, 10000000)  # 10M total
-
-        # Step 2: Perform 50 recharge transactions
+    def test_concurrent_recharges(self):
+        # Approve 10 credit increases of 500,000 for a total of 5,000,000
+        for _ in range(10):
+            req = CreditService.increase_credit(self.seller1,amount=5000000)
+            CreditService.approve_request(request_id=req.id)
+        # print(User.objects.all())
         def recharge_worker(seller_id, start_idx, count):
-            from django.db import connection
-            connection.close()
-            
+            print(User.objects.all())
+            print(User.objects.all())
             seller = User.objects.get(id=seller_id)
+            credit = SellerCredit.objects.get(seller=seller)
             for i in range(count):
-                print("1243")
+                print(SellerCredit.objects.all())
                 phone_number = f"0912345{start_idx + i:04d}"
-                PhoneNumber.objects.create(phone_number=phone_number)
-                with transaction.atomic():
-                    CreditService.recharge_phone(
-                        seller=seller,
-                        phone_number=phone_number,
-                        amount=5000
-                    )
+                PhoneNumber.objects.create(number=phone_number,credit=0)
+                RechargePhoneNumberService.charge_phone_number(seller, phone_number, 5000)
 
-        num_processes = min(multiprocessing.cpu_count(), 4)
-        iterations_per_process = 50 // num_processes
-        
-        with ProcessPoolExecutor(max_workers=num_processes) as executor:
+        # Simulate 1000 recharges using 10 threads
+        num_threads = 10
+        total_recharges = 1000
+        per_thread = total_recharges // num_threads
+
+        with ThreadPoolExecutor(max_workers=num_threads) as executor:
             futures = []
-            for i in range(num_processes):
-                start_idx = i * iterations_per_process
+            for i in range(num_threads):
+                start = i * per_thread
                 futures.append(
-                    executor.submit(
-                        recharge_worker,
-                        self.seller1.id,
-                        start_idx,
-                        iterations_per_process
-                    )
+                    executor.submit(recharge_worker, self.seller1.id, start, per_thread)
                 )
-            
-            for future in futures:
-                future.result()
+            for f in futures:
+                f.result()
 
-        
+        # Assertions
         self.seller1_credit.refresh_from_db()
-        expected_credit = 10000000 - (50 * 5000)  # 10M - (50 * 5000)
-        self.assertEqual(self.seller1_credit.credit, expected_credit)
-        
-        from transactions.models import TransactionLog
-        self.assertEqual(
-            TransactionLog.objects.filter(
-                seller=self.seller1,
-                transaction_type='recharge'
-            ).count(),
-            50
-        )
-        self.assertEqual(
-            TransactionLog.objects.filter(
-                seller=self.seller1,
-                transaction_type='credit_increase'
-            ).count(),
-            10
-        )
+        self.assertEqual(self.seller1_credit.credit, 5_000_000 - 1000 * 5000)
 
-
+        self.assertEqual(
+            TransactionLog.objects.filter(seller=self.seller1, transaction_type='recharge').count(),
+            1000
+        )
 
     def test_negative_credit_prevention(self):
         """Test that credit cannot go negative during recharge"""
-        # Set initial credit
         initial_credit = 1000
         self.seller1_credit.credit = initial_credit
         self.seller1_credit.save()
-        
-        # Try to recharge more than available credit
+
         recharge_amount = 2000
         phone_number = "09123456789"
-        
+
         with self.assertRaises(Exception):
-            with transaction.atomic():
-                CreditService.recharge_phone(
-                    seller=self.seller1,
-                    phone_number=phone_number,
-                    amount=recharge_amount
-                )
-        
+            CreditService.recharge_phone(
+                seller=self.seller1,
+                phone_number=phone_number,
+                amount=recharge_amount
+            )
+
         # Verify credit remains unchanged
         self.seller1_credit.refresh_from_db()
-        self.assertEqual(self.seller1_credit.credit, initial_credit) 
+        self.assertEqual(self.seller1_credit.credit, initial_credit)

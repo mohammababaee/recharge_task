@@ -13,18 +13,16 @@ class CreditRepository:
     @staticmethod
     @transaction.atomic
     def decrease_credit(user, amount):
-
         seller_credit = (
             SellerCredit.objects.select_for_update()
             .get(seller=user)
         )
-        
         seller_credit.refresh_from_db()
 
-        if seller_credit.credit < amount:
+        if seller_credit.credit < int(amount):
             raise ValidationError("Insufficient credit.")
 
-        seller_credit.credit = F('credit') - amount
+        seller_credit.credit = F('credit') - int(amount)
         seller_credit.save()
 
         return True
@@ -32,7 +30,7 @@ class CreditRepository:
     @staticmethod
     @transaction.atomic
     def increase_credit(user, amount, return_updated=False):
-        credit = CreditRequest.objects.create(seller=user, amount=amount)
+        credit_request = CreditRequest.objects.create(seller=user, amount=amount)
 
         try:
             seller_credit = (
@@ -41,12 +39,12 @@ class CreditRepository:
             )
         except ObjectDoesNotExist:
             seller_credit = SellerCredit.objects.create(seller=user)
-
+        
         seller_credit.freezed_credit = F('freezed_credit') + amount
         seller_credit.save()
 
         if return_updated:
-            return credit
+            return credit_request
 
         return True
     
